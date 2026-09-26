@@ -783,6 +783,93 @@ kbd.press {
   color: #b8c7e8;
 }
 
+/* ---------- 跨平台迁移检查 ---------- */
+.migration-direction {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.direction-option {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 8px 16px;
+  border-radius: 10px;
+  background: var(--panel);
+}
+.direction-option.active {
+  background: var(--accent-2);
+  border-color: var(--accent);
+  color: #eaf2ff;
+}
+.direction-option .direction-label {
+  font-size: 14px;
+  font-weight: 700;
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+}
+.direction-option .direction-desc {
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.direction-option.active .direction-desc {
+  color: #b9cdf2;
+}
+.migration-filter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.migration-filter .filter-btn.active {
+  background: var(--accent-2);
+  border-color: var(--accent);
+  color: #eaf2ff;
+}
+.migration-empty {
+  background: rgba(62, 207, 142, 0.08);
+  border: 1px solid rgba(62, 207, 142, 0.45);
+  border-radius: 12px;
+  padding: 14px 16px;
+  color: #9fe8c7;
+  font-size: 13px;
+}
+.party-map {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.party-map .map-arrow {
+  color: var(--accent);
+  font-style: normal;
+  font-weight: 700;
+}
+.party-map .seq-mapped {
+  border-color: rgba(91, 157, 255, 0.65);
+  color: #bcd6ff;
+}
+.migration-leaves {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+.migration-leaves-label {
+  color: var(--muted);
+  font-size: 11.5px;
+}
+.leaf-chip {
+  font-size: 11px;
+  border-radius: 20px;
+  padding: 1px 9px;
+  border: 1px solid rgba(91, 157, 255, 0.4);
+  background: rgba(91, 157, 255, 0.1);
+  color: #bcd6ff;
+}
+
 /* ---------- 变更沙盒 ---------- */
 .sandbox-page .panel {
   overflow: hidden;

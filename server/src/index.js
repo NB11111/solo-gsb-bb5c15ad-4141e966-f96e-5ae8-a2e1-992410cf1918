@@ -11,6 +11,7 @@ const {
   previewSandbox,
   replayTimeline,
   resolveConflicts,
+  checkMigration,
 } = require('./engine');
 
 const app = express();
@@ -179,6 +180,20 @@ app.post(
     res.json(result);
   }),
 );
+
+// ---- 跨平台迁移检查（只读：Ctrl ↔ Meta 修饰键映射后的新增冲突报告，绝不写回数据文件） ----
+// GET /api/migration-check?direction=ctrl-to-meta|meta-to-ctrl（缺省 ctrl-to-meta）
+app.get('/api/migration-check', (req, res, next) => {
+  try {
+    const result = checkMigration(store.snapshot(), { direction: req.query.direction });
+    if (req.query.download !== undefined) {
+      res.setHeader('Content-Disposition', 'attachment; filename="migration-check.json"');
+    }
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
 
 // ---- 错误处理 ----
 app.use('/api', (err, req, res, next) => {

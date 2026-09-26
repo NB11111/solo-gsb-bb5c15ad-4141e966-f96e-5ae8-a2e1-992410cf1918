@@ -1,6 +1,6 @@
 # ⌨ 上下文快捷键审校台（Node.js + React）
 
-为命令式快捷键体系提供的可视化审校工具：建立**上下文树**，为命令指定所属上下文与由 **1～3 次按键**组成的序列；选择任一上下文后，系统按**最近祖先规则**构建生效绑定，自动标出**同层重复**与**前缀冲突**，并提供**逐键模拟器**实时查看候选、触发与等待状态。模拟器内含**时序回放**：录制带相对毫秒与可配置超时阈值的按键时间线，短序列既是精确命中又是长序列前缀时先进入待定，阈值内续键触发长序列、超时触发短序列，无匹配则从当前按键重新起算不吞键，并支持 JSON 导入/导出。此外可一键**生成回归测试套件**：以全部叶子上下文为候选，用精确集合覆盖选出叶子数量最少的测试上下文集合。新增的**变更沙盒**支持把命令的新增、改序列、删除先暂存为浏览器本地草案，后端在同一份草案上预演基线与模拟状态，按上下文汇总各项差异，改动确认前不触碰任何真实数据；预演响应携带**基线版本指纹**，确认无新增冲突后可**发布草案**：后端在单次写临界区内重新核对指纹、复用草案校验并原子写入，数据已变化则拒绝发布并返回当前版本与失效操作，绝不部分落盘。审校页的**冲突消解**面板可针对当前上下文的生效 duplicate/prefix 冲突自动搜索改键方案：锁定不可改命令、提供候选序列池与改动上限后，后端仅改动当前上下文定义的命令，复用生效规则精确求解，依次最小化改动命令数、总按键数与方案字典序；无解时逐个列出无法消除的冲突与原因，有解时一键把全部改键写入沙盒草案继续预演。
+为命令式快捷键体系提供的可视化审校工具：建立**上下文树**，为命令指定所属上下文与由 **1～3 次按键**组成的序列；选择任一上下文后，系统按**最近祖先规则**构建生效绑定，自动标出**同层重复**与**前缀冲突**，并提供**逐键模拟器**实时查看候选、触发与等待状态。模拟器内含**时序回放**：录制带相对毫秒与可配置超时阈值的按键时间线，短序列既是精确命中又是长序列前缀时先进入待定，阈值内续键触发长序列、超时触发短序列，无匹配则从当前按键重新起算不吞键，并支持 JSON 导入/导出。此外可一键**生成回归测试套件**：以全部叶子上下文为候选，用精确集合覆盖选出叶子数量最少的测试上下文集合。新增的**变更沙盒**支持把命令的新增、改序列、删除先暂存为浏览器本地草案，后端在同一份草案上预演基线与模拟状态，按上下文汇总各项差异，改动确认前不触碰任何真实数据；预演响应携带**基线版本指纹**，确认无新增冲突后可**发布草案**：后端在单次写临界区内重新核对指纹、复用草案校验并原子写入，数据已变化则拒绝发布并返回当前版本与失效操作，绝不部分落盘。审校页的**冲突消解**面板可针对当前上下文的生效 duplicate/prefix 冲突自动搜索改键方案：锁定不可改命令、提供候选序列池与改动上限后，后端仅改动当前上下文定义的命令，复用生效规则精确求解，依次最小化改动命令数、总按键数与方案字典序；无解时逐个列出无法消除的冲突与原因，有解时一键把全部改键写入沙盒草案继续预演。**跨平台迁移检查**页供维护者在把 Ctrl 快捷键改为 Meta（或反向）前评估风险：提供 Ctrl→Meta 与 Meta→Ctrl 两种只读映射，对全部叶子上下文比较映射前后的生效冲突，只报告迁移新增的冲突并合并展示受影响叶子。
 
 ## 一条命令启动（Docker Compose）
 
@@ -15,7 +15,7 @@ docker compose up --build -d
 端口：主机 `3000` → 容器 `3000`（可在 `docker-compose.yml` 的 `ports` 中修改左侧端口）。
 停止：`docker compose down`；数据保存在命名卷 `shortcut-data` 中，重建容器不丢失。
 
-> 镜像启动时自动完成数据初始化：首次运行若数据文件不存在，会写入一套包含覆盖、同层重复、前缀冲突等场景的演示数据（`server/src/seed.js`）。
+> 镜像启动时自动完成数据初始化：首次运行若数据文件不存在，会写入一套包含覆盖、同层重复、前缀冲突与跨平台迁移冲突等场景的演示数据（`server/src/seed.js`）。
 
 ---
 
@@ -35,8 +35,8 @@ npm run dev          # 并行启动后端(3000) 与 Vite 前端(5173)
 ```bash
 npm run build        # 构建前端到 client/dist
 npm start            # 仅启动后端；若已 build，则由后端在 3000 端口托管前端
-npm run test:engine  # 运行引擎单测（最近祖先 / 覆盖 / 重复 / 前缀 / 逐键模拟 / 回归套件 / 沙盒预演 / 沙盒发布核算 / 冲突消解）
-npm run test:api     # 运行发布接口测试（指纹核对 / 冲突门禁 / 原子落盘 / 并发发布）
+npm run test:engine  # 运行引擎单测（最近祖先 / 覆盖 / 重复 / 前缀 / 逐键模拟 / 回归套件 / 沙盒预演 / 沙盒发布核算 / 冲突消解 / 迁移检查）
+npm run test:api     # 运行接口测试（发布：指纹核对 / 冲突门禁 / 原子落盘 / 并发发布；迁移检查：双方向报告 / 参数校验 / 只读核验）
 npm test             # 以上全部
 ```
 
@@ -104,6 +104,17 @@ npm test             # 以上全部
 
 > 该能力完全只读：所有判定都在内存副本上复用与审校页相同的生效规则；`POST /api/conflicts/resolve/:contextId` 不修改数据文件，Docker Compose 启动方式不变。
 
+## 跨平台迁移检查（Ctrl ↔ Meta）
+
+顶部切换到「🧭 迁移检查」页（与审校台同一入口，Docker Compose 启动后访问 **http://localhost:3000**），供维护者在把 Ctrl 快捷键迁移到 Meta（如迁往 macOS）或反向迁移之前评估风险——全程**只读**，不修改任何命令、不持久化任何数据：
+
+1. **两种只读映射**：`Ctrl → Meta` 与 `Meta → Ctrl`。映射按**每次按键**转换其中的指定修饰键，**主键与其他修饰键保持原值**（如 `Ctrl+Shift+P` → `Shift+Meta+P`、`Ctrl+Alt+D` → `Alt+Meta+D`）；转换后**合并重复修饰键**（如 `Ctrl+Meta+K` → `Meta+K`）并按规范顺序**规范化序列**。
+2. **判定方式**：后端在内存副本上应用映射，对**全部叶子上下文**分别复用与审校页完全相同的最近祖先生效与 duplicate/prefix 判定（`computeEffective`），得到映射前 / 映射后两套冲突。
+3. **只报告迁移新增的冲突**：冲突以「参与命令身份 + 冲突类型」配对，映射前已存在的冲突（如演示数据中的 G H 同层重复、G⊂G L 前缀）不会出现在报告中；跨层同序列在映射后形成的是覆盖（shadow）而非同层重复，同样不算新增冲突。
+4. **报告内容**：每条新增冲突列出冲突双方的**原序列 → 迁移序列**（未受映射影响的一方两侧相同并标注「未变化」）、来源上下文路径与**受影响叶子**；同一冲突在多个叶子出现时**合并为一条**并汇总叶子列表。页面顶部统计叶子数、被映射命令数、两类新增冲突数与受影响叶子数，可**按冲突类型筛选**（全部 / 同层重复 / 前缀冲突），并可展开查看「序列将被改写的命令」完整清单或下载 JSON（与 `GET /api/migration-check` 返回一致）。
+
+演示数据中内置了两个迁移风险场景：`撤销 Ctrl+Z` 与 `禅模式切换 Meta+Z` 在 Ctrl→Meta 后形成同层重复；`聚焦下一个面板 Ctrl+J` 迁为 `Meta+J` 后成为 `命令历史面板 Meta+J K` 的前缀（反向 Meta→Ctrl 时两组冲突同样出现）。
+
 ## 回归套件生成
 
 顶部切换到「🧪 回归套件生成」页（只读，不改动任何审校/模拟逻辑）：
@@ -166,6 +177,7 @@ npm test             # 以上全部
 | POST | `/api/sandbox/preview` | 变更沙盒预演（只读，不写数据文件）：body 为草案，返回基线 vs 模拟状态的按上下文差异（含 `baselineFingerprint` 基线版本指纹）；加 `?download=1` 返回附件响应头 |
 | POST | `/api/sandbox/publish` | 变更沙盒发布：body 为 `{ draft, fingerprint }`，在单次写临界区内核对指纹、复用草案校验并原子写入；数据已变化返回 `409 sandbox-stale`（当前指纹 + 失效操作），引入新增冲突返回 `409 sandbox-conflicts` |
 | POST | `/api/conflicts/resolve/:contextId` | 冲突消解（只读）：仅改动当前上下文命令，按候选池/锁定/改动上限搜索无冲突改键方案；加 `?download=1` 返回附件响应头 |
+| GET | `/api/migration-check` | 跨平台迁移检查（只读）：`?direction=ctrl-to-meta`（缺省）或 `meta-to-ctrl`，对全部叶子上下文比较映射前后冲突，只报告迁移新增冲突并合并受影响叶子；加 `?download=1` 返回附件响应头 |
 
 `POST /api/sandbox/preview` 请求体（三类操作均可选，默认为空）：
 
@@ -319,6 +331,58 @@ npm test             # 以上全部
 
 候选序列非法、锁定命令不存在、`maxChanges` 为负等均返回 `400`；上下文不存在返回 `404`。该接口为纯只读计算。
 
+`GET /api/migration-check?direction=ctrl-to-meta` 返回结构（`meta-to-ctrl` 同理；未知方向返回 `400`）：
+
+```jsonc
+{
+  "format": "shortcut-migration-check-v1",
+  "generatedAt": "…",
+  "direction": "ctrl-to-meta",
+  "mapping": { "from": "ctrl", "to": "meta", "label": "Ctrl → Meta" },
+  "stats": {
+    "leafCount": 2,             // 逐一判定的叶子上下文数
+    "commandCount": 21,
+    "mappedCommandCount": 10,   // 序列会被改写的命令数
+    "affectedLeafCount": 2,     // 至少出现一个迁移新增冲突的叶子数
+    "newConflictCount": 2,
+    "newDuplicateCount": 1,
+    "newPrefixCount": 1
+  },
+  "mappedCommands": [           // 映射影响范围（只读预览，不落盘）
+    { "commandId": "cmd-5", "name": "撤销", "contextId": "ctx-editor",
+      "contextPath": "App / Editor",
+      "fromTokens": ["ctrl+z"], "fromLabel": "Ctrl+Z",
+      "toTokens": ["meta+z"], "toLabel": "Meta+Z" }
+  ],
+  "conflicts": [                // 仅迁移新增的冲突；同一冲突跨叶子合并为一条
+    {
+      "goalId": "dup:cmd-20,cmd-5",       // 参与命令身份 + 冲突类型
+      "type": "duplicate",                // duplicate | prefix
+      "kindLabel": "同层序列重复",
+      "sequenceLabel": "Meta+Z",          // 迁移后的冲突序列
+      "sequenceTokens": ["meta+z"],       // prefix 冲突则为 prefixTokens/prefixSequenceLabel
+                                          //   与 extensionTokens/extensionSequenceLabel
+      "parties": [
+        { "commandId": "cmd-5", "name": "撤销", "contextId": "ctx-editor",
+          "contextPath": "App / Editor", "role": null,   // prefix 冲突中 role 为 prefix / extension
+          "fromTokens": ["ctrl+z"], "fromLabel": "Ctrl+Z",   // 原序列
+          "toTokens": ["meta+z"], "toLabel": "Meta+Z",       // 迁移序列
+          "remapped": true },
+        { "commandId": "cmd-20", "name": "禅模式切换", "contextId": "ctx-editor",
+          "contextPath": "App / Editor", "role": null,
+          "fromTokens": ["meta+z"], "fromLabel": "Meta+Z",
+          "toTokens": ["meta+z"], "toLabel": "Meta+Z",
+          "remapped": false }
+      ],
+      "leaves": [               // 受影响叶子（同一冲突跨叶子合并展示）
+        { "contextId": "ctx-code", "contextPath": "App / Editor / Code Editor" },
+        { "contextId": "ctx-terminal", "contextPath": "App / Editor / Terminal" }
+      ]
+    }
+  ]
+}
+```
+
 `/api/regression-suite` 返回结构：
 
 ```jsonc
@@ -328,15 +392,15 @@ npm test             # 以上全部
     "leafCount": 2,                 // 叶子上下文总数
     "candidateCount": 2,            // 覆盖了至少一个目标的候选叶子数
     "selectedContextCount": 2,      // 套件入选叶子数（精确最小）
-    "commandCount": 19,
-    "triggerableCommandCount": 18,  // 至少在一个叶子可触发的命令
-    "coveredCommandCount": 18,
+    "commandCount": 21,
+    "triggerableCommandCount": 20,  // 至少在一个叶子可触发的命令
+    "coveredCommandCount": 20,
     "unreachableCommandCount": 1,   // 任何叶子都无法触发（不计入覆盖）
     "duplicateConflictCount": 1,
     "prefixConflictCount": 5,
-    "inputSequenceCount": 25,       // 套件用例输入序列总数
-    "coverableGoalCount": 24,       // 可触发命令 + 冲突目标
-    "coveredGoalCount": 24
+    "inputSequenceCount": 29,       // 套件用例输入序列总数
+    "coverableGoalCount": 26,       // 可触发命令 + 冲突目标
+    "coveredGoalCount": 26
   },
   "suite": [
     {
@@ -416,19 +480,20 @@ npm test             # 以上全部
 ├── docker-compose.yml        # 一条命令启动，端口 3000，命名卷持久化
 ├── server/
 │   ├── src/
-│   │   ├── index.js          # Express 入口、API（含沙盒预演/发布、冲突消解）、静态托管
-│   │   ├── engine.js         # 核心规则：最近祖先/冲突/逐键模拟/回归套件（精确集合覆盖）/沙盒预演/发布核算（指纹+冲突门禁）/冲突消解（分支限界改键搜索）
+│   │   ├── index.js          # Express 入口、API（含沙盒预演/发布、冲突消解、迁移检查）、静态托管
+│   │   ├── engine.js         # 核心规则：最近祖先/冲突/逐键模拟/回归套件（精确集合覆盖）/沙盒预演/发布核算（指纹+冲突门禁）/冲突消解（分支限界改键搜索）/迁移检查（Ctrl↔Meta 映射与新增冲突比对）
 │   │   ├── store.js          # JSON 文件持久化 + 校验 + 写临界区（串行化全部写操作，发布原子落盘）
 │   │   └── seed.js           # 初始演示数据
 │   └── test/
 │       ├── engine.test.js        # 引擎单测
-│       └── publish.api.test.js   # 发布接口测试（HTTP 级）
+│       ├── publish.api.test.js   # 发布接口测试（HTTP 级）
+│       └── migration.api.test.js # 迁移检查接口测试（HTTP 级）
 └── client/
     ├── src/
     │   ├── App.jsx
     │   ├── api.js
     │   ├── keymap.js          # 浏览器按键事件 -> 引擎 token
     │   ├── styles.css
-    │   └── components/       # 上下文树 / 命令面板 / 绑定与冲突 / 冲突消解 / 逐键模拟（即时+时序回放） / 回归套件 / 变更沙盒（预演+发布）
+    │   └── components/       # 上下文树 / 命令面板 / 绑定与冲突 / 冲突消解 / 逐键模拟（即时+时序回放） / 回归套件 / 变更沙盒（预演+发布） / 迁移检查
     └── vite.config.js
 ```

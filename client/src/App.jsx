@@ -7,6 +7,7 @@ import KeySimulator from './components/KeySimulator';
 import RegressionSuite from './components/RegressionSuite';
 import Sandbox from './components/Sandbox';
 import ConflictResolver from './components/ConflictResolver';
+import MigrationCheck from './components/MigrationCheck';
 
 export default function App() {
   const [state, setState] = useState({ contexts: [], commands: [] });
@@ -14,7 +15,7 @@ export default function App() {
   const [review, setReview] = useState(null);
   const [globalError, setGlobalError] = useState('');
   const [loading, setLoading] = useState(true);
-  const [view, setView] = useState('review'); // review | regression | sandbox
+  const [view, setView] = useState('review'); // review | migration | regression | sandbox
 
   const refresh = useCallback(async () => {
     const s = await api.getState();
@@ -124,6 +125,12 @@ export default function App() {
             📝 审校与模拟
           </button>
           <button
+            className={view === 'migration' ? 'tab active' : 'tab'}
+            onClick={() => setView('migration')}
+          >
+            🧭 迁移检查
+          </button>
+          <button
             className={view === 'regression' ? 'tab active' : 'tab'}
             onClick={() => setView('regression')}
           >
@@ -147,6 +154,10 @@ export default function App() {
       ) : view === 'regression' ? (
         <div className="regression-layout">
           <RegressionSuite />
+        </div>
+      ) : view === 'migration' ? (
+        <div className="regression-layout">
+          <MigrationCheck />
         </div>
       ) : (
         <div className="layout">

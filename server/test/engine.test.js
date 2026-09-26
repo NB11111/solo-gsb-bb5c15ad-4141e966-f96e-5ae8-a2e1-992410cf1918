@@ -12,6 +12,9 @@ const {
   stateFingerprint,
   inspectDraftOps,
   prepareSandboxCommit,
+  mapPressToken,
+  mapSequenceTokens,
+  checkMigration,
 } = require('../src/engine');
 
 let passed = 0;
@@ -974,6 +977,181 @@ test('冲突消解：纯只读，不修改输入状态', () => {
   const before = JSON.stringify(resolveState);
   resolveConflicts(resolveState, 'h', { candidates: ['w', 'q', 'y', 'z'] });
   assert.equal(JSON.stringify(resolveState), before);
+});
+
+/* ================= 跨平台迁移检查 ================= */
+
+const CTRL2META = { from: 'ctrl', to: 'meta' };
+const META2CTRL = { from: 'meta', to: 'ctrl' };
+
+test('迁移映射：仅转换指定修饰键，主键与其他修饰键保持原值', () => {
+  assert.equal(mapPressToken('ctrl+shift+p', CTRL2META), 'shift+meta+p');
+  assert.equal(mapPressToken('ctrl+p', CTRL2META), 'meta+p');
+  assert.equal(mapPressToken('alt+k', CTRL2META), 'alt+k'); // 其他修饰键不动
+  assert.equal(mapPressToken('g', CTRL2META), 'g'); // 无修饰键不动
+  assert.equal(mapPressToken('meta+z', META2CTRL), 'ctrl+z');
+  assert.equal(mapPressToken('meta+alt+x', META2CTRL), 'ctrl+alt+x'); // 规范化修饰键顺序
+});
+
+test('迁移映射：转换后合并重复修饰键并规范化', () => {
+  assert.equal(mapPressToken('ctrl+meta+k', CTRL2META), 'meta+k'); // ctrl→meta 后与已有 meta 合并
+  assert.equal(mapPressToken('ctrl+meta+k', META2CTRL), 'ctrl+k'); // 反向同理
+  assert.equal(mapPressToken('ctrl+alt+shift+d', CTRL2META), 'alt+shift+meta+d');
+  assert.equal(mapPressToken('ctrl', CTRL2META), 'ctrl'); // 非法 token（无主键）原样返回
+});
+
+test('迁移映射：整条序列逐按键转换并生成规范标签', () => {
+  const r = mapSequenceTokens(['ctrl+shift+p', 'x'], CTRL2META);
+  assert.deepEqual(r.tokens, ['shift+meta+p', 'x']);
+  assert.equal(r.label, 'Shift+Meta+P X');
+  assert.equal(r.changed, true);
+  const same = mapSequenceTokens(['g', 'd'], CTRL2META);
+  assert.equal(same.changed, false);
+});
+
+// 迁移检查夹具：根 MR + 两个叶子 ML1 / ML2
+const migState = {
+  contexts: [
+    { id: 'mr', parentId: null, name: 'MR' },
+    { id: 'ml1', parentId: 'mr', name: 'ML1' },
+    { id: 'ml2', parentId: 'mr', name: 'ML2' },
+  ],
+  commands: [
+    { id: 'm1', contextId: 'mr', name: 'save', sequenceTokens: ['ctrl+s'], sequenceLabel: 'Ctrl+S', description: '' },
+    { id: 'm2', contextId: 'mr', name: 'zen', sequenceTokens: ['meta+s'], sequenceLabel: 'Meta+S', description: '' },
+    // Ctrl→Meta：m1 迁为 Meta+S，与 m2 同层重复（两个叶子均可见）
+    { id: 'm3', contextId: 'mr', name: 'goto', sequenceTokens: ['ctrl+j'], sequenceLabel: 'Ctrl+J', description: '' },
+    { id: 'm4', contextId: 'mr', name: 'history', sequenceTokens: ['meta+j', 'k'], sequenceLabel: 'Meta+J K', description: '' },
+    // Ctrl→Meta：m3 迁为 Meta+J，成为 m4（Meta+J K）的前缀
+    { id: 'm5', contextId: 'mr', name: 'dup-a', sequenceTokens: ['ctrl+y'], sequenceLabel: 'Ctrl+Y', description: '' },
+    { id: 'm6', contextId: 'mr', name: 'dup-b', sequenceTokens: ['ctrl+y'], sequenceLabel: 'Ctrl+Y', description: '' },
+    // 映射前已存在的同层重复（双方同步迁为 Meta+Y），不属于迁移新增
+    { id: 'm7', contextId: 'ml1', name: 'local', sequenceTokens: ['ctrl+alt+d'], sequenceLabel: 'Ctrl+Alt+D', description: '' },
+    // 仅被映射改写，不产生冲突
+  ],
+};
+
+test('迁移检查：只报告迁移新增冲突，并跨叶子合并叶子列表', () => {
+  const r = checkMigration(migState, { direction: 'ctrl-to-meta' });
+  assert.equal(r.format, 'shortcut-migration-check-v1');
+  assert.equal(r.direction, 'ctrl-to-meta');
+  assert.equal(r.mapping.label, 'Ctrl → Meta');
+  assert.equal(r.stats.leafCount, 2);
+  assert.equal(r.stats.newConflictCount, 2);
+  assert.equal(r.stats.newDuplicateCount, 1);
+  assert.equal(r.stats.newPrefixCount, 1);
+  assert.equal(r.stats.affectedLeafCount, 2);
+  assert.equal(r.stats.mappedCommandCount, 5); // m1/m3/m5/m6/m7
+
+  // 映射前已存在的 dup{m5,m6} 不得出现在报告中
+  assert.ok(!r.conflicts.some((c) => c.goalId === 'dup:m5,m6'));
+
+  const dup = r.conflicts.find((c) => c.type === 'duplicate');
+  assert.equal(dup.goalId, 'dup:m1,m2');
+  assert.equal(dup.sequenceLabel, 'Meta+S');
+  assert.deepEqual(
+    dup.leaves.map((l) => l.contextId),
+    ['ml1', 'ml2'],
+  );
+  const p1 = dup.parties.find((p) => p.commandId === 'm1');
+  const p2 = dup.parties.find((p) => p.commandId === 'm2');
+  assert.equal(p1.fromLabel, 'Ctrl+S');
+  assert.equal(p1.toLabel, 'Meta+S');
+  assert.equal(p1.remapped, true);
+  assert.equal(p2.fromLabel, 'Meta+S'); // 未受映射影响的冲突方：原序列 = 迁移序列
+  assert.equal(p2.toLabel, 'Meta+S');
+  assert.equal(p2.remapped, false);
+
+  const pre = r.conflicts.find((c) => c.type === 'prefix');
+  assert.equal(pre.goalId, 'pre:m3::m4');
+  assert.equal(pre.prefixSequenceLabel, 'Meta+J');
+  assert.equal(pre.extensionSequenceLabel, 'Meta+J K');
+  assert.deepEqual(
+    pre.leaves.map((l) => l.contextId),
+    ['ml1', 'ml2'],
+  );
+  const prefixParty = pre.parties.find((p) => p.commandId === 'm3');
+  const extParty = pre.parties.find((p) => p.commandId === 'm4');
+  assert.equal(prefixParty.role, 'prefix');
+  assert.equal(prefixParty.fromLabel, 'Ctrl+J');
+  assert.equal(prefixParty.toLabel, 'Meta+J');
+  assert.equal(extParty.role, 'extension');
+  assert.equal(extParty.remapped, false);
+});
+
+test('迁移检查：Meta→Ctrl 反向映射对称生效', () => {
+  const r = checkMigration(migState, { direction: 'meta-to-ctrl' });
+  assert.equal(r.mapping.label, 'Meta → Ctrl');
+  assert.equal(r.stats.mappedCommandCount, 2); // 仅 m2 / m4 含 Meta
+  assert.equal(r.stats.newConflictCount, 2);
+  const dup = r.conflicts.find((c) => c.type === 'duplicate');
+  assert.equal(dup.goalId, 'dup:m1,m2'); // m2 迁为 Ctrl+S 后与 m1 重复
+  assert.equal(dup.sequenceLabel, 'Ctrl+S');
+  const pre = r.conflicts.find((c) => c.type === 'prefix');
+  assert.equal(pre.goalId, 'pre:m3::m4'); // m4 迁为 Ctrl+J K，m3（Ctrl+J）成为其前缀
+  assert.equal(pre.prefixSequenceLabel, 'Ctrl+J');
+  assert.equal(pre.extensionSequenceLabel, 'Ctrl+J K');
+});
+
+test('迁移检查：缺省方向为 ctrl-to-meta，未知方向返回 400', () => {
+  const r = checkMigration(migState);
+  assert.equal(r.direction, 'ctrl-to-meta');
+  assert.throws(() => checkMigration(migState, { direction: 'ctrl-to-alt' }), (err) => {
+    assert.equal(err.status, 400);
+    assert.match(err.message, /未知的迁移方向/);
+    return true;
+  });
+});
+
+test('迁移检查：无新增冲突时报告为空', () => {
+  const st = {
+    contexts: [{ id: 'r', parentId: null, name: 'R' }],
+    commands: [
+      { id: 'a', contextId: 'r', name: 'a', sequenceTokens: ['ctrl+a'], sequenceLabel: 'Ctrl+A', description: '' },
+      { id: 'b', contextId: 'r', name: 'b', sequenceTokens: ['ctrl+b'], sequenceLabel: 'Ctrl+B', description: '' },
+    ],
+  };
+  const r = checkMigration(st, { direction: 'ctrl-to-meta' });
+  assert.equal(r.stats.newConflictCount, 0);
+  assert.deepEqual(r.conflicts, []);
+  assert.equal(r.stats.mappedCommandCount, 2);
+  assert.deepEqual(
+    r.mappedCommands.map((m) => [m.commandId, m.fromLabel, m.toLabel]),
+    [
+      ['a', 'Ctrl+A', 'Meta+A'],
+      ['b', 'Ctrl+B', 'Meta+B'],
+    ],
+  );
+});
+
+test('迁移检查：跨层同序列在映射后形成覆盖（shadow）而非重复，不产生新增冲突', () => {
+  const st = {
+    contexts: [
+      { id: 'r', parentId: null, name: 'R' },
+      { id: 'l', parentId: 'r', name: 'L' },
+    ],
+    commands: [
+      { id: 'a', contextId: 'r', name: 'root', sequenceTokens: ['meta+x'], sequenceLabel: 'Meta+X', description: '' },
+      { id: 'b', contextId: 'l', name: 'leaf', sequenceTokens: ['ctrl+x'], sequenceLabel: 'Ctrl+X', description: '' },
+    ],
+  };
+  // 映射后 b 迁为 Meta+X，覆盖（shadow）祖先 a 的同序列绑定：是覆盖而非同层重复
+  const r = checkMigration(st, { direction: 'ctrl-to-meta' });
+  assert.equal(r.stats.newConflictCount, 0);
+});
+
+test('迁移检查：纯只读且结果与数据顺序无关', () => {
+  const before = JSON.stringify(migState);
+  const r1 = checkMigration(migState, { direction: 'ctrl-to-meta' });
+  assert.equal(JSON.stringify(migState), before);
+
+  const shuffled = {
+    contexts: [...migState.contexts].reverse(),
+    commands: [...migState.commands].reverse(),
+  };
+  const r2 = checkMigration(shuffled, { direction: 'ctrl-to-meta' });
+  const strip = (r) => ({ stats: r.stats, conflicts: r.conflicts, mappedCommands: r.mappedCommands });
+  assert.deepEqual(strip(r1), strip(r2));
 });
 
 console.log(`\n引擎测试全部通过：${passed} 项`);

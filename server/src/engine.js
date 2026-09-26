@@ -1943,6 +1943,200 @@ function resolveConflicts(state, contextId, options = {}) {
   };
 }
 
+/* ================= 跨平台迁移检查（Ctrl ↔ Meta 修饰键映射） ================= */
+
+/**
+ * 内置的两种只读修饰键映射：
+ * - ctrl-to-meta：把 Ctrl 快捷键迁往 macOS（⌘）前的风险检查；
+ * - meta-to-ctrl：把 Meta 快捷键迁回 Windows / Linux 前的风险检查。
+ */
+const MIGRATION_MAPPINGS = {
+  'ctrl-to-meta': { from: 'ctrl', to: 'meta', label: 'Ctrl → Meta' },
+  'meta-to-ctrl': { from: 'meta', to: 'ctrl', label: 'Meta → Ctrl' },
+};
+
+const MOD_ORDER = ['ctrl', 'alt', 'shift', 'meta'];
+
+/**
+ * 按修饰键映射转换单次按键 token：仅把 from 修饰键替换为 to，
+ * 主键与其他修饰键保持原值；转换后合并重复修饰键并按规范顺序排列（规范化）。
+ */
+function mapPressToken(token, mapping) {
+  const parts = String(token).split('+');
+  const mods = [];
+  let key = null;
+  for (const p of parts) {
+    if (MODIFIERS.has(p)) mods.push(p);
+    else key = p;
+  }
+  if (!key) return token; // 非法 token 不转换（正常数据经 canonicalPress 校验，必含主键）
+  const merged = [
+    ...new Set(mods.map((m) => (m === mapping.from ? mapping.to : m))),
+  ].sort((a, b) => MOD_ORDER.indexOf(a) - MOD_ORDER.indexOf(b));
+  return [...merged, key].join('+');
+}
+
+/** 映射整条序列（逐按键转换修饰键），返回 { tokens, label, changed } */
+function mapSequenceTokens(tokens, mapping) {
+  const mapped = tokens.map((t) => mapPressToken(t, mapping));
+  return {
+    tokens: mapped,
+    label: mapped.map((t) => pressToPretty(t)).join(' '),
+    changed: mapped.some((t, i) => t !== tokens[i]),
+  };
+}
+
+/**
+ * 跨平台迁移检查（纯只读，不修改传入状态、不触碰持久化数据）：
+ * 1. 按选定方向（Ctrl→Meta / Meta→Ctrl）在内存副本上逐按键转换全部命令序列的
+ *    修饰键（主键与其他修饰键保持原值，重复修饰键合并并规范化）；
+ * 2. 对全部叶子上下文分别复用 computeEffective 的最近祖先生效与 duplicate/prefix
+ *    判定（经由 analyzeLeaves），得到映射前 / 映射后两套冲突；
+ * 3. 冲突以「参与命令身份 + 冲突类型」（conflictGoalId）配对，只报告映射后**新增**
+ *    的冲突；同一冲突在多个叶子出现时合并为一条，汇总受影响叶子列表；
+ * 4. 每条报告列出冲突双方的原序列、迁移序列与受影响叶子；全部输出按稳定键排序，
+ *    结果与数据顺序无关。
+ */
+function checkMigration(state, options = {}) {
+  const raw = options.direction;
+  const direction =
+    raw === undefined || raw === null || raw === '' ? 'ctrl-to-meta' : String(raw);
+  const mapping = MIGRATION_MAPPINGS[direction];
+  if (!mapping) {
+    throw Object.assign(
+      new Error(
+        `未知的迁移方向：${direction}（可选：${Object.keys(MIGRATION_MAPPINGS).join(' / ')}）`,
+      ),
+      { status: 400 },
+    );
+  }
+
+  // 1) 构造映射后的模拟状态（内存副本；未受映射影响的命令同样复制，绝不改传入状态）
+  const mappedPairs = []; // { cmd, sim } 仅序列发生变化的命令
+  const simCommands = state.commands.map((cmd) => {
+    const mapped = mapSequenceTokens(cmd.sequenceTokens, mapping);
+    if (!mapped.changed) return { ...cmd, sequenceTokens: [...cmd.sequenceTokens] };
+    const sim = {
+      ...cmd,
+      sequenceRaw: mapped.label,
+      sequenceTokens: mapped.tokens,
+      sequenceLabel: mapped.label,
+    };
+    mappedPairs.push({ cmd, sim });
+    return sim;
+  });
+  const simState = { contexts: state.contexts, commands: simCommands };
+
+  // 2) 全部叶子上下文：分别复用最近祖先生效 + duplicate/prefix 判定
+  const baseAnalysis = analyzeLeaves(state);
+  const simAnalysis = analyzeLeaves(simState);
+  const baseEffByLeaf = new Map(baseAnalysis.reviews.map((r) => [r.leaf.id, r.eff]));
+
+  // 3) 逐叶子比较，仅收集迁移新增的冲突；同一冲突跨叶子合并
+  const merged = new Map(); // goalId -> { conflict, leaves }
+  const affectedLeafIds = new Set();
+  for (const { leaf, eff: simEff } of simAnalysis.reviews) {
+    const baseEff = baseEffByLeaf.get(leaf.id);
+    const baseGoalIds = new Set(baseEff.conflicts.map((c) => conflictGoalId(c)));
+    for (const conflict of simEff.conflicts) {
+      const goalId = conflictGoalId(conflict);
+      if (baseGoalIds.has(goalId)) continue; // 映射前已存在，不属于迁移新增
+      let entry = merged.get(goalId);
+      if (!entry) {
+        entry = { conflict, leaves: [] };
+        merged.set(goalId, entry);
+      }
+      entry.leaves.push({ contextId: leaf.id, contextPath: leaf.path });
+      affectedLeafIds.add(leaf.id);
+    }
+  }
+
+  const baseCmdById = new Map(state.commands.map((c) => [c.id, c]));
+  const simCmdById = new Map(simCommands.map((c) => [c.id, c]));
+  const tokensLabel = (tokens) => tokens.map((t) => pressToPretty(t)).join(' ');
+
+  // 冲突双方：原序列 → 迁移序列（未受映射影响的命令两侧相同）
+  const partyView = (p) => {
+    const baseCmd = baseCmdById.get(p.commandId);
+    const simCmd = simCmdById.get(p.commandId);
+    const fromTokens = baseCmd ? [...baseCmd.sequenceTokens] : [];
+    const toTokens = simCmd ? [...simCmd.sequenceTokens] : [];
+    return {
+      commandId: p.commandId,
+      name: p.name,
+      contextId: p.contextId,
+      contextPath: p.contextPath,
+      role: p.role || null,
+      fromTokens,
+      fromLabel: tokensLabel(fromTokens),
+      toTokens,
+      toLabel: tokensLabel(toTokens),
+      remapped: seqKey(fromTokens) !== seqKey(toTokens),
+    };
+  };
+
+  const byCommandId = (a, b) => (a.commandId < b.commandId ? -1 : a.commandId > b.commandId ? 1 : 0);
+  const byPath = (a, b) =>
+    a.contextPath === b.contextPath ? 0 : a.contextPath < b.contextPath ? -1 : 1;
+
+  const conflicts = [...merged.entries()].map(([goalId, { conflict, leaves }]) => {
+    const base = {
+      goalId,
+      type: conflict.type,
+      kindLabel: conflict.kindLabel,
+      parties: conflict.parties.map(partyView).sort(byCommandId),
+      leaves: leaves.sort(byPath),
+    };
+    if (conflict.type === 'duplicate') {
+      return {
+        ...base,
+        sequenceTokens: [...conflict.sequenceTokens],
+        sequenceLabel: tokensLabel(conflict.sequenceTokens),
+      };
+    }
+    return {
+      ...base,
+      prefixTokens: [...conflict.prefixTokens],
+      prefixSequenceLabel: tokensLabel(conflict.prefixTokens),
+      extensionTokens: [...conflict.extensionTokens],
+      extensionSequenceLabel: tokensLabel(conflict.extensionTokens),
+    };
+  });
+  conflicts.sort((a, b) => (a.goalId < b.goalId ? -1 : a.goalId > b.goalId ? 1 : 0));
+
+  // 序列会被改写的命令清单（映射影响范围预览）
+  const mappedCommands = mappedPairs
+    .map(({ cmd, sim }) => ({
+      commandId: cmd.id,
+      name: cmd.name,
+      contextId: cmd.contextId,
+      contextPath: contextPath(baseAnalysis.index, cmd.contextId),
+      fromTokens: [...cmd.sequenceTokens],
+      fromLabel: tokensLabel(cmd.sequenceTokens),
+      toTokens: [...sim.sequenceTokens],
+      toLabel: sim.sequenceLabel,
+    }))
+    .sort((a, b) => byPath(a, b) || byCommandId(a, b));
+
+  return {
+    format: 'shortcut-migration-check-v1',
+    generatedAt: new Date().toISOString(),
+    direction,
+    mapping: { from: mapping.from, to: mapping.to, label: mapping.label },
+    stats: {
+      leafCount: baseAnalysis.leaves.length,
+      commandCount: state.commands.length,
+      mappedCommandCount: mappedCommands.length,
+      affectedLeafCount: affectedLeafIds.size,
+      newConflictCount: conflicts.length,
+      newDuplicateCount: conflicts.filter((c) => c.type === 'duplicate').length,
+      newPrefixCount: conflicts.filter((c) => c.type === 'prefix').length,
+    },
+    mappedCommands,
+    conflicts,
+  };
+}
+
 module.exports = {
   MAX_PRESSES,
   canonicalPress,
@@ -1968,4 +2162,8 @@ module.exports = {
   inspectDraftOps,
   prepareSandboxCommit,
   resolveConflicts,
+  MIGRATION_MAPPINGS,
+  mapPressToken,
+  mapSequenceTokens,
+  checkMigration,
 };

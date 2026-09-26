@@ -240,6 +240,29 @@
       ],
       "sequenceLabel": "ctrl+`",
       "description": ""
+    },
+    {
+      "id": "cmd-20",
+      "contextId": "ctx-editor",
+      "name": "禅模式切换",
+      "sequenceRaw": "meta+z",
+      "sequenceTokens": [
+        "meta+z"
+      ],
+      "sequenceLabel": "meta+z",
+      "description": "迁移检查演示：Ctrl→Meta 后与「撤销 Ctrl+Z」同层重复"
+    },
+    {
+      "id": "cmd-21",
+      "contextId": "ctx-app",
+      "name": "命令历史面板",
+      "sequenceRaw": "meta+j k",
+      "sequenceTokens": [
+        "meta+j",
+        "k"
+      ],
+      "sequenceLabel": "meta+j k",
+      "description": "迁移检查演示：Ctrl→Meta 后「聚焦下一个面板」迁为 Meta+J，成为本序列前缀"
     }
   ]
 }

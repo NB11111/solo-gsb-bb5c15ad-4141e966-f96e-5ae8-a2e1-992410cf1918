@@ -3,6 +3,9 @@
  * - App（根）/ Editor / Code Editor / Terminal
  * - 包含：正常绑定、子级覆盖祖先（shadow）、同层重复（duplicate）、
  *   同层前缀冲突（Code Editor 的 G D 系列）、跨层前缀冲突（Terminal 的 G / G L）
+ * - 另含跨平台迁移检查演示：Meta+Z（Ctrl→Meta 后与「撤销 Ctrl+Z」同层重复）、
+ *   Meta+J K（Ctrl→Meta 后「聚焦下一个面板 Ctrl+J」迁移为 Meta+J，成为其前缀）；
+ *   反向 Meta→Ctrl 时同样各形成一组新增冲突
  */
 
 let seqId = 0;
@@ -53,6 +56,10 @@ const commands = [
   command('ctx-terminal', '清屏并回顶部', 'g h', ''),
   command('ctx-terminal', '清屏并回底部', 'g h', '同层重复绑定，演示 duplicate 冲突'),
   command('ctx-terminal', '新建终端', 'ctrl+`', ''),
+
+  // 跨平台迁移检查演示（自身不构成任何冲突，仅在修饰键映射后产生新增冲突）
+  command('ctx-editor', '禅模式切换', 'meta+z', '迁移检查演示：Ctrl→Meta 后与「撤销 Ctrl+Z」同层重复'),
+  command('ctx-app', '命令历史面板', 'meta+j k', '迁移检查演示：Ctrl→Meta 后「聚焦下一个面板」迁为 Meta+J，成为本序列前缀'),
 ];
 
 module.exports = { contexts, commands };
