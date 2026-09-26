@@ -7,6 +7,7 @@ import KeySimulator from './components/KeySimulator';
 import RegressionSuite from './components/RegressionSuite';
 import Sandbox from './components/Sandbox';
 import ConflictResolver from './components/ConflictResolver';
+import MigrationReport from './components/MigrationReport';
 
 export default function App() {
   const [state, setState] = useState({ contexts: [], commands: [] });
@@ -14,7 +15,7 @@ export default function App() {
   const [review, setReview] = useState(null);
   const [globalError, setGlobalError] = useState('');
   const [loading, setLoading] = useState(true);
-  const [view, setView] = useState('review'); // review | regression | sandbox
+  const [view, setView] = useState('review'); // review | regression | sandbox | migration
 
   const refresh = useCallback(async () => {
     const s = await api.getState();
@@ -135,6 +136,13 @@ export default function App() {
           >
             🛠 变更沙盒
           </button>
+          <button
+            className={view === 'migration' ? 'tab active' : 'tab'}
+            onClick={() => setView('migration')}
+            title="只读检查 Ctrl↔Meta 修饰键迁移后新增的冲突风险"
+          >
+            🔁 跨平台迁移检查
+          </button>
         </nav>
       </header>
 
@@ -143,6 +151,10 @@ export default function App() {
       {view === 'sandbox' ? (
         <div className="regression-layout">
           <Sandbox state={state} onRefresh={refresh} />
+        </div>
+      ) : view === 'migration' ? (
+        <div className="regression-layout">
+          <MigrationReport />
         </div>
       ) : view === 'regression' ? (
         <div className="regression-layout">
@@ -173,7 +185,7 @@ export default function App() {
           </main>
 
           <section className="col-right">
-            <BindingsPanel review={review} />
+            <BindingsPanel review={review} onOpenMigration={() => setView('migration')} />
             <ConflictResolver
               selectedContext={selectedContext}
               review={review}

@@ -3,21 +3,24 @@
  * - App（根）/ Editor / Code Editor / Terminal
  * - 包含：正常绑定、子级覆盖祖先（shadow）、同层重复（duplicate）、
  *   同层前缀冲突（Code Editor 的 G D 系列）、跨层前缀冲突（Terminal 的 G / G L）
+ * - 另含两条 Meta 绑定：在「跨平台迁移检查」页演示 Ctrl↔Meta 迁移后新增的
+ *   同层重复（Meta+J 与 Ctrl+J 映射后撞键）与前缀冲突（Ctrl+F 映射后成为 Meta+F R 的前缀）。
  */
 
 let seqId = 0;
-const command = (contextId, name, sequence, description = '') => ({
-  id: `cmd-${++seqId}`,
-  contextId,
-  name,
-  sequenceRaw: sequence,
-  sequenceTokens: sequence
-    .split(/[\s,]+/)
-    .filter(Boolean)
-    .map((s) => s.toLowerCase()),
-  sequenceLabel: sequence,
-  description,
-});
+const { parseSequence } = require('./engine');
+const command = (contextId, name, sequence, description = '') => {
+  const parsed = parseSequence(sequence);
+  return {
+    id: `cmd-${++seqId}`,
+    contextId,
+    name,
+    sequenceRaw: sequence,
+    sequenceTokens: parsed.tokens,
+    sequenceLabel: parsed.label,
+    description,
+  };
+};
 
 const contexts = [
   { id: 'ctx-app', parentId: null, name: 'App', description: '整个应用（全局快捷键）' },
@@ -53,6 +56,10 @@ const commands = [
   command('ctx-terminal', '清屏并回顶部', 'g h', ''),
   command('ctx-terminal', '清屏并回底部', 'g h', '同层重复绑定，演示 duplicate 冲突'),
   command('ctx-terminal', '新建终端', 'ctrl+`', ''),
+
+  // Meta 绑定：迁移检查演示（基线均无冲突；Ctrl→Meta / Meta→Ctrl 后产生新冲突）
+  command('ctx-app', '面板聚焦（macOS）', 'meta+j', '与 Ctrl+J 平行的 Meta 绑定；迁移后与「聚焦下一个面板」同序列重复'),
+  command('ctx-editor', '替换全部并执行', 'meta+f r', '迁移后 Ctrl+F 变为 Meta+F，与本序列构成新增前缀冲突'),
 ];
 
 module.exports = { contexts, commands };

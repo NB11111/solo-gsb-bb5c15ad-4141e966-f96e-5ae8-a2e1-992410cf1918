@@ -12,6 +12,10 @@ const {
   stateFingerprint,
   inspectDraftOps,
   prepareSandboxCommit,
+  migratePressToken,
+  migrateSequenceTokens,
+  migrateState,
+  generateMigrationReport,
 } = require('../src/engine');
 
 let passed = 0;
@@ -974,6 +978,173 @@ test('冲突消解：纯只读，不修改输入状态', () => {
   const before = JSON.stringify(resolveState);
   resolveConflicts(resolveState, 'h', { candidates: ['w', 'q', 'y', 'z'] });
   assert.equal(JSON.stringify(resolveState), before);
+});
+
+// ---------- 跨平台迁移检查（Ctrl ↔ Meta，只读） ----------
+
+test('迁移映射：Ctrl→Meta 仅替换该修饰键，主键与其他修饰键不变', () => {
+  assert.deepEqual(migratePressToken('ctrl+k', 'ctrl-to-meta').token, 'meta+k');
+  assert.equal(migratePressToken('ctrl+k', 'ctrl-to-meta').changed, true);
+  assert.deepEqual(migratePressToken('ctrl+alt+shift+k', 'ctrl-to-meta').token, 'alt+shift+meta+k');
+  assert.deepEqual(migratePressToken('ctrl+meta+k', 'ctrl-to-meta').token, 'meta+k'); // 合并重复修饰键
+  assert.deepEqual(migratePressToken('alt+k', 'ctrl-to-meta').token, 'alt+k'); // 其他修饰键保持原值
+  assert.equal(migratePressToken('alt+k', 'ctrl-to-meta').changed, false);
+  assert.equal(migratePressToken('k', 'ctrl-to-meta').changed, false); // 主键不变
+  assert.deepEqual(migratePressToken('meta+k', 'meta-to-ctrl').token, 'ctrl+k');
+  // 多键序列逐键转换并规范化
+  const seq = migrateSequenceTokens(['ctrl+f', 'r'], 'ctrl-to-meta');
+  assert.deepEqual(seq.tokens, ['meta+f', 'r']);
+  assert.equal(seq.label, 'Meta+F R');
+  assert.equal(seq.changed, true);
+});
+
+test('迁移检查：非法方向抛出 400', () => {
+  assert.throws(() => generateMigrationReport(state, 'alt-to-meta'), { status: 400 });
+});
+
+test('迁移检查：只报告迁移新增的冲突，原有同身份冲突不计入', () => {
+  // 独立夹具：a 层 c5/c6 的 Y 同层重复（基线已存在），迁移不应报告；
+  // ctrl+j（root）与 meta+j（root）在 Ctrl→Meta 后新增同层重复。
+  const st = {
+    contexts: state.contexts,
+    commands: [
+      ...state.commands,
+      { id: 'm1', contextId: 'root', name: 'root-ctrlj', sequenceTokens: ['ctrl+j'], sequenceLabel: 'Ctrl+J', description: '' },
+      { id: 'm2', contextId: 'root', name: 'root-metaj', sequenceTokens: ['meta+j'], sequenceLabel: 'Meta+J', description: '' },
+    ],
+  };
+  const r = generateMigrationReport(st, 'ctrl-to-meta');
+  const goalIds = r.conflicts.map((c) => c.goalId);
+  assert.ok(goalIds.includes('dup:m1,m2'), '应报告迁移新增的 Meta+J 同层重复');
+  assert.ok(!goalIds.includes('dup:c5,c6'), '迁移前已存在的同层重复不应报告');
+  assert.equal(r.stats.duplicateCount, 1);
+  assert.equal(r.stats.prefixCount, 0);
+});
+
+test('迁移检查：新增前缀冲突给出双方原序列/迁移序列', () => {
+  const st = {
+    contexts: [{ id: 'r', parentId: null, name: 'R' }],
+    commands: [
+      { id: 'f1', contextId: 'r', name: 'find', sequenceTokens: ['ctrl+f'], sequenceLabel: 'Ctrl+F', description: '' },
+      { id: 'f2', contextId: 'r', name: 'replace-all', sequenceTokens: ['meta+f', 'r'], sequenceLabel: 'Meta+F R', description: '' },
+    ],
+  };
+  const r = generateMigrationReport(st, 'ctrl-to-meta');
+  assert.equal(r.stats.prefixCount, 1);
+  const rec = r.conflicts.find((c) => c.type === 'prefix');
+  assert.deepEqual(rec.prefixTokens, ['meta+f']);
+  assert.deepEqual(rec.extensionTokens, ['meta+f', 'r']);
+  assert.deepEqual(rec.originalPrefixSequenceLabels, ['Ctrl+F']);
+  assert.deepEqual(rec.originalExtensionSequenceLabels, ['Meta+F R']);
+  assert.ok(rec.parties.some((p) => p.commandId === 'f1' && p.changed && p.fromSequenceLabel === 'Ctrl+F' && p.toSequenceLabel === 'Meta+F'));
+  assert.ok(rec.parties.some((p) => p.commandId === 'f2' && !p.changed && p.fromSequenceLabel === 'Meta+F R' && p.toSequenceLabel === 'Meta+F R'));
+});
+
+test('迁移检查：同一冲突跨多个叶子合并展示叶子列表', () => {
+  // 主 state 树中 root 层命令在全部叶子（b、sibling）生效；
+  // ctrl+j / meta+j 撞键冲突应合并为一条、附带两个受影响叶子。
+  const st = {
+    contexts: state.contexts,
+    commands: [
+      ...state.commands,
+      { id: 'm1', contextId: 'root', name: 'root-ctrlj', sequenceTokens: ['ctrl+j'], sequenceLabel: 'Ctrl+J', description: '' },
+      { id: 'm2', contextId: 'root', name: 'root-metaj', sequenceTokens: ['meta+j'], sequenceLabel: 'Meta+J', description: '' },
+    ],
+  };
+  const r = generateMigrationReport(st, 'ctrl-to-meta');
+  const rec = r.conflicts.find((c) => c.goalId === 'dup:m1,m2');
+  assert.ok(rec);
+  assert.equal(rec.affectedLeaves.length, 2);
+  assert.deepEqual(rec.affectedLeaves.map((l) => l.contextPath), ['Root / A / B', 'Root / Sibling']);
+  assert.equal(r.stats.affectedLeafCount, 2);
+});
+
+test('迁移检查：迁移前后均无同身份冲突时不报告（跨层命令映射后序列仍不同）', () => {
+  // root G ⊂ G D 的前缀冲突与修饰键无关，迁移后身份不变（不报告）；
+  // root 的 Ctrl+K 与 a 的 Meta+K 在两个方向上映射后仍然是不同序列，不产生新冲突。
+  const st = {
+    contexts: [
+      { id: 'r', parentId: null, name: 'R' },
+      { id: 'a', parentId: 'r', name: 'A' },
+      { id: 'l', parentId: 'a', name: 'L' },
+    ],
+    commands: [
+      { id: 'g1', contextId: 'r', name: 'rg', sequenceTokens: ['g'], sequenceLabel: 'G', description: '' },
+      { id: 'g2', contextId: 'r', name: 'rgd', sequenceTokens: ['g', 'd'], sequenceLabel: 'G D', description: '' },
+      { id: 'x1', contextId: 'r', name: 'ctrlk', sequenceTokens: ['ctrl+k'], sequenceLabel: 'Ctrl+K', description: '' },
+      { id: 'x2', contextId: 'a', name: 'metak', sequenceTokens: ['meta+k'], sequenceLabel: 'Meta+K', description: '' },
+    ],
+  };
+  assert.equal(generateMigrationReport(st, 'ctrl-to-meta').stats.conflictCount, 0);
+  assert.equal(generateMigrationReport(st, 'meta-to-ctrl').stats.conflictCount, 0);
+});
+
+test('迁移检查：shadow 变化改变冲突参与方时按命令身份判为新增', () => {
+  // root Meta+K ⊂ root Meta+K R（基线前缀冲突）；a 层 Ctrl+K 在 Ctrl→Meta 后变为
+  // Meta+K 覆盖 root Meta+K，旧身份（x1::x3）消失、新身份（x2::x3）出现 => 报告新增。
+  const st = {
+    contexts: [
+      { id: 'r', parentId: null, name: 'R' },
+      { id: 'a', parentId: 'r', name: 'A' },
+      { id: 'l', parentId: 'a', name: 'L' },
+    ],
+    commands: [
+      { id: 'x1', contextId: 'r', name: 'root-mk', sequenceTokens: ['meta+k'], sequenceLabel: 'Meta+K', description: '' },
+      { id: 'x3', contextId: 'r', name: 'root-mkr', sequenceTokens: ['meta+k', 'r'], sequenceLabel: 'Meta+K R', description: '' },
+      { id: 'x2', contextId: 'a', name: 'a-ctrlk', sequenceTokens: ['ctrl+k'], sequenceLabel: 'Ctrl+K', description: '' },
+    ],
+  };
+  const r = generateMigrationReport(st, 'ctrl-to-meta');
+  assert.equal(r.stats.prefixCount, 1);
+  assert.equal(r.conflicts[0].goalId, 'pre:x2::x3');
+});
+
+test('迁移检查：meta-to-ctrl 反向映射同样检测新增冲突', () => {
+  const st = {
+    contexts: [{ id: 'r', parentId: null, name: 'R' }],
+    commands: [
+      { id: 'f1', contextId: 'r', name: 'find', sequenceTokens: ['ctrl+f'], sequenceLabel: 'Ctrl+F', description: '' },
+      { id: 'f2', contextId: 'r', name: 'replace-all', sequenceTokens: ['meta+f', 'r'], sequenceLabel: 'Meta+F R', description: '' },
+    ],
+  };
+  const r = generateMigrationReport(st, 'meta-to-ctrl');
+  assert.equal(r.stats.prefixCount, 1);
+  const rec = r.conflicts[0];
+  assert.deepEqual(rec.prefixTokens, ['ctrl+f']);
+  assert.deepEqual(rec.extensionTokens, ['ctrl+f', 'r']);
+});
+
+test('迁移检查：纯只读，不修改输入状态与命令', () => {
+  const before = JSON.stringify(state);
+  const beforeFingerprint = stateFingerprint(state);
+  generateMigrationReport(state, 'ctrl-to-meta');
+  generateMigrationReport(state, 'meta-to-ctrl');
+  assert.equal(JSON.stringify(state), before);
+  assert.equal(stateFingerprint(state), beforeFingerprint);
+});
+
+test('迁移检查：结果稳定，与命令数组顺序无关', () => {
+  const st = {
+    contexts: [{ id: 'r', parentId: null, name: 'R' }],
+    commands: [
+      { id: 'f1', contextId: 'r', name: 'find', sequenceTokens: ['ctrl+f'], sequenceLabel: 'Ctrl+F', description: '' },
+      { id: 'j1', contextId: 'r', name: 'panels', sequenceTokens: ['ctrl+j'], sequenceLabel: 'Ctrl+J', description: '' },
+      { id: 'f2', contextId: 'r', name: 'replace-all', sequenceTokens: ['meta+f', 'r'], sequenceLabel: 'Meta+F R', description: '' },
+      { id: 'j2', contextId: 'r', name: 'panels-mac', sequenceTokens: ['meta+j'], sequenceLabel: 'Meta+J', description: '' },
+    ],
+  };
+  const r1 = generateMigrationReport(st, 'ctrl-to-meta');
+  const r2 = generateMigrationReport({ contexts: st.contexts, commands: [...st.commands].reverse() }, 'ctrl-to-meta');
+  const strip = (r) => ({
+    stats: r.stats,
+    conflicts: r.conflicts.map((c) => ({
+      goalId: c.goalId,
+      type: c.type,
+      leaves: c.affectedLeaves.map((l) => l.contextId),
+      parties: c.parties.map((p) => [p.commandId, p.fromSequenceLabel, p.toSequenceLabel]),
+    })),
+  });
+  assert.deepEqual(strip(r1), strip(r2));
 });
 
 console.log(`\n引擎测试全部通过：${passed} 项`);

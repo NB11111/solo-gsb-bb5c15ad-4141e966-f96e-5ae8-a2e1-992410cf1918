@@ -11,6 +11,7 @@ const {
   previewSandbox,
   replayTimeline,
   resolveConflicts,
+  generateMigrationReport,
 } = require('./engine');
 
 const app = express();
@@ -175,6 +176,19 @@ app.post(
     const result = resolveConflicts(store.snapshot(), req.params.contextId, req.body || {});
     if (req.query.download !== undefined) {
       res.setHeader('Content-Disposition', 'attachment; filename="conflict-resolution.json"');
+    }
+    res.json(result);
+  }),
+);
+
+// ---- 跨平台迁移检查（只读：Ctrl↔Meta 修饰键映射后报告迁移新增的冲突，绝不写回数据文件） ----
+// GET /api/migration-report/:direction，direction = ctrl-to-meta | meta-to-ctrl
+app.get(
+  '/api/migration-report/:direction',
+  wrap((req, res) => {
+    const result = generateMigrationReport(store.snapshot(), req.params.direction);
+    if (req.query.download !== undefined) {
+      res.setHeader('Content-Disposition', 'attachment; filename="migration-report.json"');
     }
     res.json(result);
   }),

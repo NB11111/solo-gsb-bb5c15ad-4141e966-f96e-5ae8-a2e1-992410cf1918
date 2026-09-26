@@ -1943,6 +1943,242 @@ function resolveConflicts(state, contextId, options = {}) {
   };
 }
 
+/* ================= 跨平台迁移检查（Ctrl ↔ Meta，只读） ================= */
+
+/**
+ * 两种只读迁移方向：按每次按键把修饰键 from -> to，
+ * 主键与 Alt/Shift 等其他修饰键保持原值；转换后合并重复修饰键并规范化序列。
+ */
+const MIGRATION_DIRECTIONS = {
+  'ctrl-to-meta': { key: 'ctrl-to-meta', from: 'ctrl', to: 'meta', fromLabel: 'Ctrl', toLabel: 'Meta', label: 'Ctrl → Meta' },
+  'meta-to-ctrl': { key: 'meta-to-ctrl', from: 'meta', to: 'ctrl', fromLabel: 'Meta', toLabel: 'Ctrl', label: 'Meta → Ctrl' },
+};
+
+function resolveMigrationDirection(direction) {
+  const dir = typeof direction === 'string' ? MIGRATION_DIRECTIONS[direction] : direction;
+  if (!dir || !MODIFIERS.has(dir.from) || !MODIFIERS.has(dir.to) || dir.from === dir.to) {
+    throw Object.assign(new Error(`未知的跨平台迁移方向：${direction}`), { status: 400 });
+  }
+  return dir;
+}
+
+/**
+ * 转换单次按键 token（已是 canonicalPress 规范化形态）：
+ * - 仅替换 from 修饰键为 to，主键与其他修饰键保持原值；
+ * - 同时含有 from/to（如 Ctrl+Meta+K 转 Ctrl→Meta）时合并重复修饰键；
+ * - 结果按 Ctrl/Alt/Shift/Meta 固定顺序规范化。
+ * 返回 { token, pretty, changed }。
+ */
+function migratePressToken(token, direction) {
+  const dir = resolveMigrationDirection(direction);
+  const raw = String(token || '');
+  const parts = raw.split('+').filter(Boolean);
+  const mods = [];
+  const mains = [];
+  for (const p of parts) {
+    if (MODIFIERS.has(p)) mods.push(p);
+    else mains.push(p);
+  }
+  if (mains.length !== 1) {
+    return { token: raw, pretty: pressToPretty(raw), changed: false };
+  }
+  const order = ['ctrl', 'alt', 'shift', 'meta'];
+  const converted = new Set(mods.map((m) => (m === dir.from ? dir.to : m)));
+  const nextMods = [...converted].sort((a, b) => order.indexOf(a) - order.indexOf(b));
+  const nextToken = [...nextMods, mains[0]].join('+');
+  return { token: nextToken, pretty: pressToPretty(nextToken), changed: nextToken !== raw };
+}
+
+/** 转换整条序列（1~3 次按键），返回新 tokens / label 与是否发生变化 */
+function migrateSequenceTokens(tokens, direction) {
+  const presses = (tokens || []).map((t) => migratePressToken(t, direction));
+  return {
+    tokens: presses.map((p) => p.token),
+    label: presses.map((p) => p.pretty).join(' '),
+    changed: presses.some((p) => p.changed),
+    presses,
+  };
+}
+
+/**
+ * 在状态副本上执行迁移映射：不修改传入状态（上下文对象原样复用、命令浅拷贝），
+ * 不落盘、不产生任何副作用。返回 { state, direction, migratedCommandCount }。
+ */
+function migrateState(state, direction) {
+  const dir = resolveMigrationDirection(direction);
+  let migratedCommandCount = 0;
+  const commands = state.commands.map((cmd) => {
+    const moved = migrateSequenceTokens(cmd.sequenceTokens, dir);
+    if (moved.changed) migratedCommandCount += 1;
+    return {
+      ...cmd,
+      sequenceRaw: moved.label,
+      sequenceTokens: moved.tokens,
+      sequenceLabel: moved.label,
+    };
+  });
+  return { state: { contexts: state.contexts, commands }, direction: dir, migratedCommandCount };
+}
+
+const byString = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+
+/** 以迁移后的冲突对象构建报告记录（双方补充各自的原序列 / 迁移序列） */
+function buildMigrationConflictRecord(conflict, dir, baseCmdById, migratedCmdById) {
+  const parties = conflict.parties
+    .map((p) => {
+      const baseCmd = baseCmdById.get(p.commandId) || null;
+      const migCmd = migratedCmdById.get(p.commandId) || null;
+      const fromLabel = baseCmd ? baseCmd.sequenceLabel : p.sequenceLabel;
+      const toLabel = migCmd ? migCmd.sequenceLabel : p.sequenceLabel;
+      return {
+        commandId: p.commandId,
+        name: p.name,
+        contextId: p.contextId,
+        contextPath: p.contextPath,
+        role: p.role || null,
+        fromSequenceTokens: baseCmd ? [...baseCmd.sequenceTokens] : [],
+        fromSequenceLabel: fromLabel,
+        toSequenceTokens: migCmd ? [...migCmd.sequenceTokens] : [],
+        toSequenceLabel: toLabel,
+        changed: fromLabel !== toLabel,
+      };
+    })
+    .sort((a, b) => byString(a.commandId, b.commandId));
+
+  const distinctFromLabels = (role) =>
+    [
+      ...new Set(
+        (role ? parties.filter((p) => p.role === role) : parties).map((p) => p.fromSequenceLabel),
+      ),
+    ].sort(byString);
+
+  const record = {
+    goalId: conflictGoalId(conflict),
+    type: conflict.type,
+    kindLabel: conflict.kindLabel,
+    direction: dir.key,
+    parties,
+    affectedLeafCount: 0,
+    affectedLeaves: [],
+  };
+  if (conflict.type === 'duplicate') {
+    record.sequenceTokens = [...conflict.sequenceTokens];
+    record.sequenceLabel = conflict.sequenceLabel;
+    record.originalSequenceLabels = distinctFromLabels(null);
+  } else {
+    record.prefixTokens = [...conflict.prefixTokens];
+    record.extensionTokens = [...conflict.extensionTokens];
+    record.prefixSequenceLabel = conflict.prefixSequenceLabel;
+    record.extensionSequenceLabel = conflict.extensionSequenceLabel;
+    record.originalPrefixSequenceLabels = distinctFromLabels('prefix');
+    record.originalExtensionSequenceLabels = distinctFromLabels('extension');
+  }
+  return record;
+}
+
+/**
+ * 跨平台迁移检查报告：
+ * 1. 对全部叶子上下文分别复用 computeEffective 的最近祖先生效 / shadowed /
+ *    duplicate / prefix 判定，得到迁移前（基线）与迁移后两份结果；
+ * 2. 冲突以「命令身份（参与命令集合）+ 冲突类型」配对（conflictGoalId），
+ *    只报告迁移新增的冲突（迁移前该叶子不存在同一身份）；
+ * 3. 同一冲突在多个叶子出现时合并为一条，附受影响叶子列表；
+ * 4. 纯只读：不修改命令，也不触碰持久化数据；全部输出稳定排序。
+ */
+function generateMigrationReport(baseState, direction) {
+  const dir = resolveMigrationDirection(direction);
+  const { state: migratedState, migratedCommandCount } = migrateState(baseState, dir);
+
+  const index = buildIndex(baseState.contexts);
+  const leaves = [...index.byId.values()]
+    .filter((c) => c.children.length === 0)
+    .map((c) => ({ id: c.id, path: contextPath(index, c.id) }))
+    .sort((a, b) => byString(a.path, b.path) || byString(a.id, b.id));
+
+  const baseCmdById = new Map(baseState.commands.map((c) => [c.id, c]));
+  const migratedCmdById = new Map(migratedState.commands.map((c) => [c.id, c]));
+
+  // goalId -> 合并后的冲突记录；另按记录维护受影响叶子集合
+  const records = new Map();
+  const leafSets = new Map();
+  let affectedLeafCount = 0;
+  const allLeavesTouched = new Set();
+
+  for (const leaf of leaves) {
+    const before = computeEffective(baseState, leaf.id);
+    const after = computeEffective(migratedState, leaf.id);
+    const beforeGoals = new Set(before.conflicts.map(conflictGoalId));
+
+    for (const conflict of after.conflicts) {
+      const goalId = conflictGoalId(conflict);
+      if (beforeGoals.has(goalId)) continue; // 迁移前已存在的同身份冲突：不报告
+
+      let record = records.get(goalId);
+      if (!record) {
+        record = buildMigrationConflictRecord(conflict, dir, baseCmdById, migratedCmdById);
+        records.set(goalId, record);
+        leafSets.set(goalId, new Set());
+      }
+      const leafSet = leafSets.get(goalId);
+      if (!leafSet.has(leaf.id)) {
+        leafSet.add(leaf.id);
+        record.affectedLeaves.push({ contextId: leaf.id, contextPath: leaf.path });
+        record.affectedLeafCount += 1;
+        if (!allLeavesTouched.has(leaf.id)) {
+          allLeavesTouched.add(leaf.id);
+          affectedLeafCount += 1;
+        }
+      }
+    }
+  }
+
+  const merged = [...records.values()];
+  const signatureOf = (r) =>
+    r.type === 'duplicate'
+      ? r.sequenceLabel
+      : `${r.prefixSequenceLabel} ⊂ ${r.extensionSequenceLabel}`;
+  merged.sort(
+    (a, b) =>
+      (a.type === b.type ? 0 : a.type === 'duplicate' ? -1 : 1) ||
+      byString(signatureOf(a), signatureOf(b)) ||
+      byString(a.goalId, b.goalId),
+  );
+  for (const record of merged) {
+    record.affectedLeaves.sort((a, b) => byString(a.contextPath, b.contextPath) || byString(a.contextId, b.contextId));
+  }
+
+  const affectedCommandIds = new Set();
+  for (const record of merged) {
+    for (const p of record.parties) affectedCommandIds.add(p.commandId);
+  }
+
+  return {
+    format: 'shortcut-migration-report-v1',
+    generatedAt: new Date().toISOString(),
+    direction: dir.key,
+    directionLabel: dir.label,
+    mapping: {
+      fromModifier: dir.fromLabel,
+      toModifier: dir.toLabel,
+      description:
+        `只读映射：按每次按键把 ${dir.fromLabel} 修饰键转换为 ${dir.toLabel}，` +
+        '主键与 Alt/Shift 等其他修饰键保持原值；转换后合并重复修饰键，并按 Ctrl/Alt/Shift/Meta 固定顺序规范化序列。',
+    },
+    stats: {
+      leafCount: leaves.length,
+      commandCount: baseState.commands.length,
+      migratedCommandCount,
+      conflictCount: merged.length,
+      duplicateCount: merged.filter((r) => r.type === 'duplicate').length,
+      prefixCount: merged.filter((r) => r.type === 'prefix').length,
+      affectedLeafCount,
+      affectedCommandCount: affectedCommandIds.size,
+    },
+    conflicts: merged,
+    readOnly: true,
+  };
+}
+
 module.exports = {
   MAX_PRESSES,
   canonicalPress,
@@ -1968,4 +2204,9 @@ module.exports = {
   inspectDraftOps,
   prepareSandboxCommit,
   resolveConflicts,
+  MIGRATION_DIRECTIONS,
+  migratePressToken,
+  migrateSequenceTokens,
+  migrateState,
+  generateMigrationReport,
 };

@@ -58,7 +58,7 @@ function ConflictCard({ conflict }) {
   );
 }
 
-export default function BindingsPanel({ review }) {
+export default function BindingsPanel({ review, onOpenMigration }) {
   if (!review) {
     return (
       <div className="panel">
@@ -79,6 +79,16 @@ export default function BindingsPanel({ review }) {
         <h2>
           生效绑定 <span className="sub">{review.contextPath}</span>
         </h2>
+        <div className="panel-header-actions">
+          <button
+            type="button"
+            className="migration-entry"
+            onClick={onOpenMigration}
+            title="只读检查把 Ctrl 改为 Meta（或反向）后会新增哪些冲突"
+          >
+            🔁 跨平台迁移检查
+          </button>
+        </div>
       </div>
 
       <div className="chain">

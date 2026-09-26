@@ -13,7 +13,8 @@
     "start": "node server/src/index.js",
     "test:engine": "node server/test/engine.test.js",
     "test:api": "node server/test/publish.api.test.js",
-    "test": "npm run test:engine && npm run test:api"
+    "test:migration": "node server/test/migration.api.test.js",
+    "test": "npm run test:engine && npm run test:api && npm run test:migration"
   },
   "devDependencies": {
     "concurrently": "^9.1.0"

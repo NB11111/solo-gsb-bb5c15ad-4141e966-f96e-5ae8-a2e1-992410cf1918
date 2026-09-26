@@ -36,4 +36,5 @@ export const api = {
     request('/sandbox/publish', { method: 'POST', body: JSON.stringify({ draft, fingerprint }) }),
   resolveConflicts: (contextId, body) =>
     request(`/conflicts/resolve/${contextId}`, { method: 'POST', body: JSON.stringify(body) }),
+  migrationReport: (direction) => request(`/migration-report/${direction}`),
 };

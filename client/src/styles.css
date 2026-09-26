@@ -1349,3 +1349,118 @@ select:focus {
 .sandbox-conflict-block {
   margin: 8px 0;
 }
+
+/* ---------- 跨平台迁移检查 ---------- */
+.migration-page {
+  gap: 12px;
+}
+.migration-entry {
+  padding: 4px 10px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.migration-readonly-notice {
+  border: 1px solid rgba(91, 157, 255, 0.45);
+  background: rgba(91, 157, 255, 0.09);
+  border-radius: 9px;
+  padding: 8px 12px;
+  font-size: 12.5px;
+  color: #cdd9f2;
+}
+.migration-direction-tabs {
+  display: flex;
+  gap: 6px;
+}
+.migration-filters {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.migration-clean {
+  border: 1px solid rgba(62, 207, 142, 0.45);
+  background: rgba(62, 207, 142, 0.08);
+  color: var(--ok);
+  border-radius: 10px;
+  padding: 14px 16px;
+  font-size: 13.5px;
+}
+.migration-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.migration-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px 14px 12px;
+}
+.migration-card.duplicate {
+  border-color: rgba(240, 107, 122, 0.5);
+}
+.migration-card.prefix {
+  border-color: rgba(245, 181, 68, 0.5);
+}
+.migration-card-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.migration-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.migration-group {
+  background: rgba(0, 0, 0, 0.14);
+  border-radius: 9px;
+  padding: 6px 10px 8px;
+}
+.migration-parties {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.migration-parties li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12.5px;
+}
+.migration-seq-pair {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.migration-arrow {
+  color: var(--muted);
+  font-size: 11.5px;
+}
+.migration-leaves {
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  border-top: 1px solid #222d45;
+  padding-top: 8px;
+}
+.migration-leaves-label {
+  color: var(--muted);
+  font-size: 12px;
+}
+.migration-leaf-tag {
+  font-size: 11.5px;
+  color: #b8c7e8;
+  background: #182033;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 1px 10px;
+}
